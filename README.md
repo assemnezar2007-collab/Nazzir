@@ -204,9 +204,8 @@ NAZEER/
 The structure above is a recommendation for organizing the project.
 Adjust it to match the files actually included in this repository.
 Demo and Project Links
-- Live platform: Add deployment URL
+- Live platform: (https://assemnezar2007-collab.github.io/Nazzir/)
 - Project video: Add video URL
-- Presentation: Add presentation URL
 - NASA Space Apps Challenge project page: Add project page URL
 Team
 Add the names and roles of the project team members.
