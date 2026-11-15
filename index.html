@@ -13440,8 +13440,96 @@ window.exportMultiComparisonPDF=function(){
 };
 document.addEventListener('DOMContentLoaded',()=>{ensureControls();window.updateMultiSiteSelectors();});
 window.addEventListener('load',()=>setTimeout(()=>{ensureControls();window.updateMultiSiteSelectors();},900));
+(function(){
+ const factorPalette={temp:'#ef4444',hum:'#06b6d4',press:'#6366f1',slope:'#f59e0b',elevation:'#8b5cf6',solar:'#eab308',sarRough:'#0d9488',aridity:'#84cc16',dust:'#64748b'};
+ const factorReason={temp:'قياس حراري',hum:'قياس رطوبة',press:'قياس ضغط',slope:'قياس ميل',elevation:'بيانات ارتفاع تضاريسي',solar:'بيانات إشعاع شمسي',sarRough:'بيانات رادارية SAR',aridity:'مؤشر الجفاف',dust:'مؤشر الغبار AOD'};
+ const fmt=(v,u)=>num(v)?String(v)+' '+u:'غير متاح';
+ const factorScore=(f)=>calcParamScore(f?.val,f?.baseVal,({temp:60,hum:50,press:1000,slope:30,elevation:3000,solar:6,sarRough:6,aridity:50,dust:.8})[f?.key]||1);
+ function factorTile(k,label,unit,f){
+   const raw=calcParamScore(f?.val,f?.baseVal,({temp:60,hum:50,press:1000,slope:30,elevation:3000,solar:6,sarRough:6,aridity:50,dust:.8})[k]);
+   const counted=!!f?.available,score=raw===null?null:raw,color=factorPalette[k];
+   const status=counted?'محتسب في النتيجة':(score===null?'لا توجد قراءات كافية':'متاح استرشادياً — مستبعد من الوزن');
+   const width=score===null?0:score;
+   return `<article class="nz-factor-visual" style="--factor-color:${color}">
+    <div class="nz-factor-head"><span class="nz-factor-dot"></span><b>${label}</b><span class="nz-factor-status ${counted?'is-counted':''}">${status}</span></div>
+    <div class="nz-factor-values"><div><small>الموقع الأرضي</small><strong>${fmt(f?.val,unit)}</strong></div><div><small>المرجع الفضائي</small><strong>${fmt(f?.baseVal,unit)}</strong></div></div>
+    <div class="nz-factor-chart-label"><span>مؤشر التشابه</span><b>${score===null?'—':score+'%'}</b></div>
+    <div class="nz-factor-track" role="img" aria-label="مؤشر التشابه ${score===null?'غير متاح':score+' بالمئة'}"><span style="width:${width}%"></span></div>
+    <div class="nz-factor-foot"><span>الوزن الفعلي: ${counted?Number(f.weight).toFixed(1)+'%':'0%'}</span><span>${factorReason[k]}</span></div>
+   </article>`;
+ }
+ renderFullCards=function(results,base){
+  const host=document.getElementById('multi-detailed-cards-container');if(!host)return;host.innerHTML='';
+  results.forEach((r,i)=>{
+   const s=r.site,coords=Array.isArray(s.coords)?s.coords.join(' , '):'غير متاحة';
+   const tiles=keys.map(([k,label,unit])=>factorTile(k,label,unit,r.factors[k])).join('');
+   const rows=keys.map(([k,label,unit])=>{const f=r.factors[k],raw=calcParamScore(f?.val,f?.baseVal,({temp:60,hum:50,press:1000,slope:30,elevation:3000,solar:6,sarRough:6,aridity:50,dust:.8})[k]);return `<tr><td>${safe(label)}</td><td>${safe(fmt(f?.val,unit))}</td><td>${safe(fmt(f?.baseVal,unit))}</td><td>${raw===null?'غير متاح':raw+'%'}</td><td>${f?.available?Number(f.weight).toFixed(1)+'%':'0%'}</td><td>${f?.available?'داخل الحساب':(raw===null?'لا توجد بيانات':'مستبعد حسب منهجية المصدر')}</td></tr>`}).join('');
+   const card=document.createElement('article');card.className='nz-site-report-card';
+   card.innerHTML=`<header class="nz-site-report-head"><div><span class="nz-site-rank">#${i+1}</span><div><h4>${safe(s.name)}</h4><p>${safe(s.country||'الدولة غير محددة')} · ${r.isRover?'رصد ميداني ESP32':'بيانات NASA / إدخال يدوي'}</p></div></div><div class="nz-overall-score"><strong>${r.overallScore}%</strong><small>التشابه الكلي</small></div></header>
+    <div class="nz-site-meta"><div><small>الموقع الفضائي المرجعي</small><b>${safe(base.name)}</b></div><div><small>الجرم السماوي</small><b>${safe(base.body||window.nzActiveComparison?.body||'غير محدد')}</b></div><div><small>تغطية الأوزان الاسمية</small><b>${safe(r.weightSummary)}</b></div></div>
+    <section class="nz-factor-section"><div class="nz-section-title"><div><h5>التحليل البيئي لكل عامل</h5><p>كل بطاقة تعرض القراءتين ومؤشر التشابه والوزن الفعلي.</p></div><span>9 عوامل</span></div><div class="nz-factor-grid">${tiles}</div></section>
+    <section class="nz-table-section"><h5>جدول المقارنة التفصيلي</h5><div class="overflow-x-auto"><table class="nz-full-factor-table"><thead><tr><th>العامل</th><th>قيمة الأرض</th><th>قيمة المرجع</th><th>التشابه</th><th>الوزن</th><th>حالة الحساب</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+    <section class="nz-site-description-grid"><div><h5>تفاصيل الموقع الأرضي</h5><p><b>الوصف:</b> ${safe(s.desc||s.terrainType||'لا يوجد وصف مسجل')}</p><p><b>الدولة:</b> ${safe(s.country||'غير محددة')}</p><p><b>الإحداثيات:</b> ${safe(coords)}</p><p><b>المصدر:</b> ${safe(s.source||'غير موثق')}</p><p><b>نوع الرصد:</b> ${r.isRover?'حساسات عربة ESP32':'بيانات استشعار عن بعد / إدخال يدوي'}</p></div><div><h5>تفاصيل الموقع الفضائي</h5><p><b>الاسم:</b> ${safe(base.name||'غير محدد')}</p><p><b>الوصف:</b> ${safe(base.desc||'لا يوجد وصف مسجل')}</p><p><b>مجموعة البيانات:</b> ${safe(base.pdsDatasetId||'غير محددة')}</p><p><b>مصدر الأرشيف:</b> ${safe(base.pdsNode||'غير محدد')}</p><p><b>الإحداثيات:</b> ${safe(Array.isArray(base.coords)?base.coords.join(' , '):'غير متاحة')}</p></div></section>
+    <p class="nz-method-note">النتيجة مؤشر تشابه تجريبي وليست إثباتاً للتطابق البيئي. العوامل غير المحتسبة لا تدخل في الدرجة النهائية، حتى إن أمكن عرض قراءة استرشادية لها.</p>`;
+   host.appendChild(card);
+  });
+ };
+ // A clean overview: one colored score bar per factor for every selected Earth site.
+ window.renderNazeerFactorOverview=function(results){
+  const canvas=document.getElementById('multiComparisonBarChart');if(!canvas)return;
+  const shell=canvas.parentElement;if(!shell)return;
+  const factors=keys;
+  shell.innerHTML=`<div class="nz-overview-wrap"><div class="nz-overview-heading"><div><h4>مؤشرات التشابه حسب العامل</h4><p>لون مستقل لكل عامل — القيم من 0 إلى 100%، والبيانات غير المتاحة تظهر كشرطة فارغة.</p></div><span>${results.length} مواقع</span></div><div class="nz-overview-grid">${factors.map(([k,label])=>`<section class="nz-overview-factor" style="--factor-color:${factorPalette[k]}"><h5><i></i>${label}</h5>${results.map(r=>{const f=r.factors[k],v=calcParamScore(f?.val,f?.baseVal,({temp:60,hum:50,press:1000,slope:30,elevation:3000,solar:6,sarRough:6,aridity:50,dust:.8})[k]);return `<div class="nz-overview-line"><div><span title="${safe(r.site.name)}">${safe(r.site.name)}</span><b>${v===null?'—':v+'%'}</b></div><div class="nz-overview-track"><span style="width:${v===null?0:v}%"></span></div></div>`}).join('')}</section>`).join('')}</div></div>`;
+ };
+ const originalRun=window.runMultiSiteComparison;
+ window.runMultiSiteComparison=function(){originalRun();if(Array.isArray(multiComparisonResults)&&multiComparisonResults.length)window.renderNazeerFactorOverview(multiComparisonResults);};
+ // Enrich the PDF report with the same nine colored factor charts and full metadata.
+ const originalExport=window.exportMultiComparisonPDF;
+ window.exportMultiComparisonPDF=function(){
+  if(!Array.isArray(multiComparisonResults)||!multiComparisonResults.length){originalExport();return;}
+  const base=window.nzActiveComparison?.base||selectedModel();
+  const details=document.getElementById('print-multi-details-container');
+  if(details){details.innerHTML=multiComparisonResults.map((r,i)=>{
+   const tiles=keys.map(([k,label,unit])=>factorTile(k,label,unit,r.factors[k])).join('');
+   const rows=keys.map(([k,label,unit])=>{const f=r.factors[k],v=calcParamScore(f?.val,f?.baseVal,({temp:60,hum:50,press:1000,slope:30,elevation:3000,solar:6,sarRough:6,aridity:50,dust:.8})[k]);return `<tr><td>${safe(label)}</td><td>${safe(fmt(f?.val,unit))}</td><td>${safe(fmt(f?.baseVal,unit))}</td><td>${v===null?'غير متاح':v+'%'}</td><td>${f?.available?Number(f.weight).toFixed(1)+'%':'0%'}</td><td>${f?.available?'محتسب':(v===null?'بيانات غير متاحة':'مستبعد من الوزن')}</td></tr>`}).join('');
+   return `<section class="nz-print-site"><h3>${safe(r.site.name)} — ${r.overallScore}%</h3><p>${safe(r.site.country||'')} | ${safe(r.site.source||'مصدر غير موثق')} | ${r.isRover?'ESP32':'NASA / يدوي'}</p><p><b>الوصف:</b> ${safe(r.site.desc||'غير مسجل')} | <b>الإحداثيات:</b> ${safe(Array.isArray(r.site.coords)?r.site.coords.join(', '):'غير متاحة')}</p><div class="nz-factor-grid nz-print-factor-grid">${tiles}</div><table><thead><tr><th>العامل</th><th>قيمة الأرض</th><th>قيمة المرجع</th><th>التشابه</th><th>الوزن</th><th>حالة الحساب</th></tr></thead><tbody>${rows}</tbody></table><p><b>المرجع الفضائي:</b> ${safe(base.name)} | <b>الوصف:</b> ${safe(base.desc||'غير مسجل')} | <b>Dataset:</b> ${safe(base.pdsDatasetId||'غير محددة')} | <b>المصدر:</b> ${safe(base.pdsNode||'غير محدد')}</p></section>`;
+  }).join('');}
+  const now=new Date(),set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v==null?'—':String(v);};
+  set('print-multi-doc-id','NZR-MULTI-'+now.getFullYear()+'-'+Math.floor(1000+Math.random()*9000));
+  set('print-multi-doc-date',now.toLocaleString('ar-EG'));
+  set('print-multi-target-name',(base?.name||'—')+' ('+(base?.body||window.nzActiveComparison?.body||'—')+')');
+  const tbody=document.getElementById('print-multi-table-body');
+  if(tbody){tbody.innerHTML='';multiComparisonResults.forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML='<td>'+(i+1)+'</td><td>'+safe(r.site.name)+'</td><td>'+safe(r.site.country||'')+'</td><td>'+r.overallScore+'%</td><td>'+safe(r.weightSummary)+'</td>'+keys.map(([k])=>'<td>'+(r.factors[k]?.available?r.factors[k].score+'%':'غير محتسب')+'</td>').join('');tbody.appendChild(tr);});const head=tbody.closest('table')?.querySelector('thead tr');if(head)head.innerHTML='<th>#</th><th>الموقع الأرضي</th><th>الدولة</th><th>التشابه الكلي</th><th>توزيع الأوزان</th>'+keys.map(x=>'<th>'+safe(x[1])+'</th>').join('');}
+  set('print-multi-conclusion','تمت مقارنة '+multiComparisonResults.length+' موقعاً أرضياً مع '+(base?.name||'الموقع المرجعي')+'. مؤشر التشابه تجريبي ويعتمد على العوامل المتاحة والأوزان المحددة. العوامل غير المتاحة أو المستبعدة لا تدخل في الدرجة النهائية. القيم الاسترشادية المعروضة لا تدخل في الحساب.');
+  const single=document.getElementById('print-report-container'),multi=document.getElementById('print-multi-report-container');
+  if(single)single.classList.remove('active-print');if(multi)multi.classList.add('active-print');
+  window.print();setTimeout(()=>{if(multi)multi.classList.remove('active-print');},1200);
+ };
+})();
+
+
 })();
 </script>
+
+
+<style id="nazeer-factor-visual-upgrade">
+#multi-site-tab .nz-site-report-card{background:linear-gradient(145deg,#fff,#f8fbff);border:1px solid #d9e8f5;border-radius:22px;padding:22px;box-shadow:0 14px 35px -30px #173b70;margin:18px 0;display:grid;gap:18px}
+#multi-site-tab .nz-site-report-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding-bottom:15px;border-bottom:1px solid #e5edf6}
+#multi-site-tab .nz-site-report-head>div:first-child{display:flex;align-items:center;gap:12px}.nz-site-rank{width:38px;height:38px;border-radius:13px;background:#eaf2ff;color:#2449a6;display:grid;place-items:center;font-weight:900}
+#multi-site-tab .nz-site-report-head h4{font-weight:900;font-size:17px;color:#142b55}.nz-site-report-head p{font-size:11px;color:#718096;margin-top:4px}
+.nz-overall-score{text-align:center;background:#eef5ff;border:1px solid #d7e7fa;border-radius:16px;padding:9px 16px;min-width:92px}.nz-overall-score strong{display:block;font-size:25px;color:#2148a8;font-weight:950}.nz-overall-score small{font-size:10px;color:#60718d;font-weight:700}
+.nz-site-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.nz-site-meta>div{background:#f4f8fd;border:1px solid #e2edf7;border-radius:13px;padding:11px}.nz-site-meta small,.nz-factor-values small{display:block;color:#73839b;font-size:10px;margin-bottom:5px}.nz-site-meta b{font-size:12px;color:#203b69}
+.nz-factor-section,.nz-table-section{display:grid;gap:12px}.nz-section-title{display:flex;align-items:center;justify-content:space-between;gap:10px}.nz-section-title h5,.nz-table-section h5,.nz-site-description-grid h5{font-size:14px;font-weight:900;color:#1b3562}.nz-section-title p{font-size:10px;color:#75849a;margin-top:3px}.nz-section-title>span{font-size:10px;font-weight:800;color:#3156a8;background:#eaf2ff;padding:6px 10px;border-radius:20px}
+.nz-factor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.nz-factor-visual{--factor-color:#4770e1;background:#fff;border:1px solid #e0eaf4;border-radius:16px;padding:13px;min-width:0;box-shadow:0 7px 18px -20px #1e3a8a}.nz-factor-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:12px}.nz-factor-head b{font-size:12px;color:#233b62}.nz-factor-dot,.nz-overview-factor h5 i{width:10px;height:10px;display:inline-block;border-radius:4px;background:var(--factor-color);flex:none}.nz-factor-status{margin-inline-start:auto;font-size:9px;color:#b45309;background:#fff7e6;padding:4px 6px;border-radius:7px}.nz-factor-status.is-counted{color:#087443;background:#e9f9f0}
+.nz-factor-values{display:grid;grid-template-columns:1fr 1fr;gap:8px}.nz-factor-values>div{background:#f7f9fc;border-radius:10px;padding:8px;min-width:0}.nz-factor-values strong{font-size:12px;color:#1c345e;overflow-wrap:anywhere}.nz-factor-chart-label{display:flex;justify-content:space-between;align-items:center;margin-top:13px;font-size:10px;color:#65758c}.nz-factor-chart-label b{font-size:14px;color:var(--factor-color)}.nz-factor-track,.nz-overview-track{height:10px;background:#edf2f7;border-radius:20px;overflow:hidden;margin-top:6px}.nz-factor-track span,.nz-overview-track span{display:block;height:100%;border-radius:20px;background:var(--factor-color);box-shadow:0 2px 6px color-mix(in srgb,var(--factor-color) 25%,transparent)}.nz-factor-foot{display:flex;justify-content:space-between;gap:6px;margin-top:8px;font-size:9px;color:#8190a4}
+.nz-full-factor-table{width:100%;border-collapse:separate;border-spacing:0;min-width:720px;font-size:11px;overflow:hidden;border:1px solid #e1eaf3;border-radius:12px}.nz-full-factor-table th{background:#edf4fc;color:#29446d;padding:11px;text-align:right;white-space:nowrap}.nz-full-factor-table td{padding:10px;border-top:1px solid #eaf0f6;color:#40536e}.nz-full-factor-table tr:nth-child(even){background:#f9fbfe}
+.nz-site-description-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.nz-site-description-grid>div{background:#f3f8fd;border:1px solid #e0ebf5;border-radius:14px;padding:13px}.nz-site-description-grid p{font-size:10px;line-height:1.9;color:#536781;margin-top:5px;overflow-wrap:anywhere}.nz-method-note{background:#fff9e9;border:1px solid #f5e3b2;border-radius:11px;padding:10px;color:#76551b;font-size:10px;line-height:1.8}
+.nz-overview-wrap{height:100%;overflow:auto;padding:4px}.nz-overview-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.nz-overview-heading h4{font-weight:900;color:#1d3767;font-size:14px}.nz-overview-heading p{font-size:10px;color:#73839b;margin-top:3px}.nz-overview-heading>span{font-size:10px;background:#edf4ff;color:#2b4e9d;border-radius:20px;padding:6px 10px}.nz-overview-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.nz-overview-factor{--factor-color:#4770e1;border:1px solid #e2ebf5;border-radius:13px;padding:11px;background:#fff}.nz-overview-factor h5{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:900;color:#294269;margin-bottom:10px}.nz-overview-line{margin-top:8px}.nz-overview-line>div:first-child{display:flex;justify-content:space-between;gap:8px;font-size:9px;color:#718096}.nz-overview-line>div:first-child span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:75%}.nz-overview-line b{color:#344d76}.nz-overview-track{height:7px;margin-top:4px}.nz-overview-track span{background:var(--factor-color)}
+@media(max-width:900px){.nz-factor-grid,.nz-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.nz-site-meta{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.nz-factor-grid,.nz-overview-grid,.nz-site-description-grid,.nz-site-meta{grid-template-columns:1fr}.nz-site-report-head{align-items:flex-start}}
+@media print{#print-multi-report-container .nz-factor-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}#print-multi-report-container .nz-factor-visual{padding:7px;border:1px solid #bbb;break-inside:avoid}#print-multi-report-container .nz-factor-head b{font-size:8pt}#print-multi-report-container .nz-factor-values strong{font-size:8pt}#print-multi-report-container .nz-print-site{break-inside:auto!important}#print-multi-report-container .nz-print-site table{break-inside:avoid}#print-multi-report-container .nz-factor-track span{-webkit-print-color-adjust:exact;print-color-adjust:exact}#print-multi-report-container .nz-factor-dot{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+
 
 </body>
 </html>
