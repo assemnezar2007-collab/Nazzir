@@ -1,0 +1,1021 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <DHT.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP085.h>
+#include <PubSubClient.h>
+#include <math.h>
+
+// ==================================================
+//                 L298N MOTOR PINS
+// ==================================================
+
+#define ENA_PIN 14
+#define IN1_PIN 27
+#define IN2_PIN 26
+
+#define IN3_PIN 25
+#define IN4_PIN 33
+#define ENB_PIN 32
+
+// ==================================================
+//                 MOTOR SPEED
+// ==================================================
+
+const int MOTOR_SPEED_LEFT = 160;
+const int MOTOR_SPEED_RIGHT = 160;
+-
+const int TURN_SPEED = 140;
+
+// ==================================================
+//                 MOVEMENT TIME
+// ==================================================
+
+const unsigned long TIME_1M = 1700;
+const unsigned long TIME_2M = TIME_1M * 2UL;
+
+const unsigned long TIME_TURN_RIGHT = 350;
+const unsigned long STOP_DELAY = 300;
+
+// ==================================================
+//                    WIFI
+// ==================================================
+
+const char* wifiSSID = "assem";
+const char* wifiPassword = "Assem2007";
+
+const char* apSSID = "NASA_Rover";
+const char* apPassword = "Rover1234";
+
+WebServer server(80);
+
+// ==================================================
+//                    MQTT
+// ==================================================
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
+const char* mqttServer = "broker.hivemq.com";
+const int mqttPort = 1883;
+
+const char* mqttTopic =
+  "nasa-rover/assem-01/test";
+
+const char* mqttCommandTopic =
+  "nasa-rover/assem-01/command";
+
+const char* mqttStatusTopic =
+  "nasa-rover/assem-01/status";
+
+// ==================================================
+//                    SENSORS
+// ==================================================
+
+#define DHT_PIN 4
+#define DHT_TYPE DHT11
+
+DHT dht(DHT_PIN, DHT_TYPE);
+
+Adafruit_MPU6050 mpu;
+bool mpuReady = false;
+
+Adafruit_BMP085 bmp;
+bool bmpReady = false;
+
+// ==================================================
+//                 SENSOR CACHE
+// ==================================================
+
+String latestSensorJson = "{}";
+
+unsigned long lastSensorRead = 0;
+unsigned long lastReconnectAttempt = 0;
+
+const unsigned long sensorInterval = 2000;
+const unsigned long reconnectInterval = 5000;
+
+// ==================================================
+//                 MISSION STATE
+// ==================================================
+
+enum MissionPhase {
+  MISSION_IDLE,
+  MISSION_FORWARD,
+  MISSION_STOP_BEFORE_TURN,
+  MISSION_TURN_RIGHT,
+  MISSION_STOP_AFTER_TURN,
+  MISSION_FINISHED
+};
+
+MissionPhase missionPhase = MISSION_IDLE;
+
+unsigned long phaseStartTime = 0;
+
+bool missionRunning = false;
+bool missionAbortedByMqtt = false;
+
+int completedSides = 0;
+
+// ==================================================
+//                 DASHBOARD HTML
+// ==================================================
+
+const char PAGE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>NASA Rover Dashboard</title>
+
+<style>
+
+body {
+  background: #101820;
+  color: white;
+  font-family: Arial;
+  text-align: center;
+  margin: 0;
+  padding: 18px;
+}
+
+h1 {
+  color: #64d8ff;
+  font-size: 28px;
+}
+
+.subtitle { color: #aaa; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  max-width: 600px;
+  margin: auto;
+}
+
+.card {
+  background: #202c39;
+  border: 1px solid #34495e;
+  border-radius: 14px;
+  padding: 16px 8px;
+  margin-bottom: 12px;
+}
+
+.card h3 {
+  color: #64d8ff;
+  font-size: 15px;
+}
+
+.value {
+  color: #80ffdb;
+  font-size: 23px;
+  font-weight: bold;
+}
+
+.sensor {
+  max-width: 600px;
+  margin: 12px auto;
+  background: #202c39;
+  border-radius: 14px;
+  padding: 15px;
+}
+
+.axis {
+  display: flex;
+  justify-content: space-around;
+  gap: 8px;
+}
+
+.axis div {
+  color: #80ffdb;
+  font-size: 16px;
+}
+
+.status { color: #80ffdb; }
+small { color: #aaa; }
+
+@media(max-width:350px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+</style>
+</head>
+
+<body>
+
+<h1>NASA ROVER</h1>
+<p class="subtitle">Ground Validation Dashboard</p>
+
+<div class="grid">
+
+  <div class="card">
+    <h3>Temperature</h3>
+    <div class="value" id="temp">--</div>
+  </div>
+
+  <div class="card">
+    <h3>Humidity</h3>
+    <div class="value" id="humidity">--</div>
+  </div>
+
+  <div class="card">
+    <h3>Atmospheric Pressure</h3>
+    <div class="value" id="pressure">--</div>
+    <small>hPa</small>
+  </div>
+
+  <div class="card">
+    <h3>Altitude</h3>
+    <div class="value" id="altitude">--</div>
+    <small>meters (estimated)</small>
+  </div>
+
+  <div class="card">
+    <h3>BMP180 Temperature</h3>
+    <div class="value" id="bmpTemp">--</div>
+  </div>
+
+</div>
+
+<div class="sensor">
+
+  <h3>MPU6050 - Accelerometer</h3>
+
+  <div class="axis">
+    <div>X<br><span id="ax">--</span></div>
+    <div>Y<br><span id="ay">--</span></div>
+    <div>Z<br><span id="az">--</span></div>
+  </div>
+
+  <small>m/s²</small>
+
+</div>
+
+<div class="sensor">
+
+  <h3>MPU6050 - Gyroscope</h3>
+
+  <div class="axis">
+    <div>X<br><span id="gx">--</span></div>
+    <div>Y<br><span id="gy">--</span></div>
+    <div>Z<br><span id="gz">--</span></div>
+  </div>
+
+  <small>rad/s</small>
+
+</div>
+
+<div class="sensor">
+
+  <h3>Sensor Status</h3>
+
+  <p id="dhtStatus">DHT11: Checking...</p>
+  <p id="mpuStatus">MPU6050: Checking...</p>
+  <p id="bmpStatus">BMP180: Checking...</p>
+
+  <p class="status" id="connection">Connecting...</p>
+
+  <small>Updating every 2 seconds</small>
+
+</div>
+
+<script>
+
+async function updateData() {
+
+  try {
+
+    const response = await fetch('/data');
+
+    if (!response.ok) throw new Error();
+
+    const d = await response.json();
+
+    function show(id, value, unit = '') {
+      document.getElementById(id).textContent =
+        value === null ? 'N/A' : value + unit;
+    }
+
+    show('temp', d.temperature, ' °C');
+    show('humidity', d.humidity, ' %');
+
+    show('pressure', d.pressure);
+    show('altitude', d.altitude, ' m');
+
+    show('bmpTemp', d.bmpTemp, ' °C');
+
+    show('ax', d.ax);
+    show('ay', d.ay);
+    show('az', d.az);
+
+    show('gx', d.gx);
+    show('gy', d.gy);
+    show('gz', d.gz);
+
+    document.getElementById('dhtStatus').textContent =
+      d.dhtReady ? 'DHT11: Connected' : 'DHT11: Read Error';
+
+    document.getElementById('mpuStatus').textContent =
+      d.mpuReady ? 'MPU6050: Connected' : 'MPU6050: Not Found';
+
+    document.getElementById('bmpStatus').textContent =
+      d.bmpReady ? 'BMP180: Connected' : 'BMP180: Not Found';
+
+    document.getElementById('connection').textContent =
+      'Connected - Live Data';
+
+  } catch(error) {
+
+    document.getElementById('connection').textContent =
+      'Connection Error';
+
+  }
+
+}
+
+updateData();
+setInterval(updateData, 2000);
+
+</script>
+
+</body>
+</html>
+)rawliteral";
+
+// ==================================================
+//                 MOTOR CONTROL
+// ==================================================
+
+void stopMotors() {
+
+  digitalWrite(IN1_PIN, LOW);
+  digitalWrite(IN2_PIN, LOW);
+
+  digitalWrite(IN3_PIN, LOW);
+  digitalWrite(IN4_PIN, LOW);
+
+  analogWrite(ENA_PIN, 0);
+  analogWrite(ENB_PIN, 0);
+
+}
+
+// ==================================================
+//                 MOVE FORWARD
+// ==================================================
+
+void moveForward(int speedL, int speedR) {
+
+  digitalWrite(IN1_PIN, HIGH);
+  digitalWrite(IN2_PIN, LOW);
+
+  // Right motor direction corrected
+  digitalWrite(IN3_PIN, LOW);
+  digitalWrite(IN4_PIN, HIGH);
+
+  analogWrite(ENA_PIN, speedL);
+  analogWrite(ENB_PIN, speedR);
+
+}
+
+// ==================================================
+//                 TURN RIGHT
+// ==================================================
+
+void turnRight() {
+
+  // Left motor forward
+  digitalWrite(IN1_PIN, HIGH);
+  digitalWrite(IN2_PIN, LOW);
+
+  // Right motor backward
+  digitalWrite(IN3_PIN, HIGH);
+  digitalWrite(IN4_PIN, LOW);
+
+  analogWrite(ENA_PIN, TURN_SPEED);
+  analogWrite(ENB_PIN, TURN_SPEED);
+
+}
+
+// ==================================================
+//                 MQTT STATUS
+// ==================================================
+
+void publishMissionStatus(const char* status) {
+
+  if (mqttClient.connected()) {
+
+    bool sent = mqttClient.publish(mqttStatusTopic, status);
+
+    Serial.print("Mission Status: ");
+
+    Serial.println(sent ? status : "Publish Failed");
+
+  }
+
+}
+
+// ==================================================
+//                 STOP MISSION
+// ==================================================
+
+void stopRoverMission(bool notifyDashboard) {
+
+  stopMotors();
+
+  missionRunning = false;
+  missionPhase = MISSION_IDLE;
+
+  phaseStartTime = 0;
+  completedSides = 0;
+
+  Serial.println(">>> MISSION STOPPED <<<");
+
+  if (notifyDashboard) {
+    publishMissionStatus("MISSION_STOPPED");
+  }
+
+}
+
+// ==================================================
+//                 START MISSION
+// ==================================================
+
+void startRoverMission() {
+
+  if (missionRunning) return;
+
+  missionAbortedByMqtt = false;
+
+  missionRunning = true;
+
+  completedSides = 0;
+
+  missionPhase = MISSION_FORWARD;
+
+  phaseStartTime = millis();
+
+  moveForward(
+    MOTOR_SPEED_LEFT,
+    MOTOR_SPEED_RIGHT
+  );
+
+  Serial.println(">>> SQUARE MISSION STARTED <<<");
+  Serial.println("Side 1 - Moving 2 Meters");
+
+  publishMissionStatus("MISSION_STARTED");
+
+}
+
+// ==================================================
+//                 MQTT CALLBACK
+// ==================================================
+
+void mqttCallback(
+  char* topic,
+  byte* payload,
+  unsigned int length
+) {
+
+  String receivedMessage;
+
+  receivedMessage.reserve(length);
+
+  for (unsigned int i = 0; i < length; i++) {
+    receivedMessage += (char)payload[i];
+  }
+
+  receivedMessage.trim();
+
+  Serial.print("MQTT Topic: ");
+  Serial.println(topic);
+
+  Serial.print("MQTT Message: ");
+  Serial.println(receivedMessage);
+
+  if (String(topic) != mqttCommandTopic) return;
+
+  if (receivedMessage == "START_MISSION") {
+
+    startRoverMission();
+
+  }
+
+  else if (receivedMessage == "STOP_MISSION") {
+
+    if (missionRunning) {
+      stopRoverMission(true);
+    } else {
+      stopMotors();
+      publishMissionStatus("MISSION_STOPPED");
+    }
+
+  }
+
+}
+
+// ==================================================
+//             AUTOMATIC SQUARE MISSION
+// ==================================================
+
+void updateRoverMission() {
+
+  if (!missionRunning) return;
+
+  unsigned long now = millis();
+
+  switch (missionPhase) {
+
+    // MOVE FORWARD 2 METERS
+    case MISSION_FORWARD:
+
+      if (now - phaseStartTime >= TIME_2M) {
+
+        stopMotors();
+
+        phaseStartTime = now;
+
+        missionPhase = MISSION_STOP_BEFORE_TURN;
+
+        completedSides++;
+
+        Serial.print("Side Completed: ");
+        Serial.println(completedSides);
+
+      }
+
+      break;
+
+    // STOP BEFORE TURN
+    case MISSION_STOP_BEFORE_TURN:
+
+      if (now - phaseStartTime >= STOP_DELAY) {
+
+        // FINISH AFTER FOURTH SIDE
+        if (completedSides >= 4) {
+
+          stopMotors();
+
+          missionRunning = false;
+
+          missionPhase = MISSION_FINISHED;
+
+          Serial.println(">>> SQUARE MISSION COMPLETED <<<");
+
+          publishMissionStatus("MISSION_COMPLETED");
+
+        }
+
+        else {
+
+          turnRight();
+
+          phaseStartTime = now;
+
+          missionPhase = MISSION_TURN_RIGHT;
+
+          Serial.println("Turning Right 90 Degrees");
+
+        }
+
+      }
+
+      break;
+
+    // TURN RIGHT
+    case MISSION_TURN_RIGHT:
+
+      if (now - phaseStartTime >= TIME_TURN_RIGHT) {
+
+        stopMotors();
+
+        phaseStartTime = now;
+
+        missionPhase = MISSION_STOP_AFTER_TURN;
+
+        Serial.println("Right Turn Completed");
+
+      }
+
+      break;
+
+    // STOP AFTER TURN
+    case MISSION_STOP_AFTER_TURN:
+
+      if (now - phaseStartTime >= STOP_DELAY) {
+
+        moveForward(
+          MOTOR_SPEED_LEFT,
+          MOTOR_SPEED_RIGHT
+        );
+
+        phaseStartTime = now;
+
+        missionPhase = MISSION_FORWARD;
+
+        Serial.print("Starting Side: ");
+        Serial.println(completedSides + 1);
+
+      }
+
+      break;
+
+    case MISSION_IDLE:
+    case MISSION_FINISHED:
+      break;
+
+  }
+
+}
+
+// ==================================================
+//                 SENSOR DATA
+// ==================================================
+
+void updateSensorData() {
+
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+
+  bool dhtDataReady =
+    !isnan(temperature) && !isnan(humidity);
+
+  float ax = 0, ay = 0, az = 0;
+  float gx = 0, gy = 0, gz = 0;
+  float slope = 0;
+
+  if (mpuReady) {
+
+    sensors_event_t a, g, t;
+
+    mpu.getEvent(&a, &g, &t);
+
+    ax = a.acceleration.x;
+    ay = a.acceleration.y;
+    az = a.acceleration.z;
+
+    gx = g.gyro.x;
+    gy = g.gyro.y;
+    gz = g.gyro.z;
+
+    slope =
+      atan2(
+        sqrt(ax * ax + ay * ay),
+        fabs(az)
+      ) * 180.0 / PI;
+
+  }
+
+  float pressure = 0;
+  float altitude = 0;
+  float bmpTemp = 0;
+
+  if (bmpReady) {
+
+    pressure = bmp.readPressure() / 100.0;
+
+    altitude = bmp.readAltitude(101325);
+
+    bmpTemp = bmp.readTemperature();
+
+  }
+
+  String json = "{";
+
+  json += "\"temperature\":" +
+    (dhtDataReady ? String(temperature, 2) : "null");
+
+  json += ",\"humidity\":" +
+    (dhtDataReady ? String(humidity, 2) : "null");
+
+  json += ",\"dhtReady\":" +
+    String(dhtDataReady ? "true" : "false");
+
+  json += ",\"mpuReady\":" +
+    String(mpuReady ? "true" : "false");
+
+  json += ",\"bmpReady\":" +
+    String(bmpReady ? "true" : "false");
+
+  json += ",\"pressure\":" +
+    (bmpReady ? String(pressure, 2) : "null");
+
+  json += ",\"altitude\":" +
+    (bmpReady ? String(altitude, 2) : "null");
+
+  json += ",\"bmpTemp\":" +
+    (bmpReady ? String(bmpTemp, 2) : "null");
+
+  json += ",\"ax\":" +
+    (mpuReady ? String(ax, 2) : "null");
+
+  json += ",\"ay\":" +
+    (mpuReady ? String(ay, 2) : "null");
+
+  json += ",\"az\":" +
+    (mpuReady ? String(az, 2) : "null");
+
+  json += ",\"gx\":" +
+    (mpuReady ? String(gx, 2) : "null");
+
+  json += ",\"gy\":" +
+    (mpuReady ? String(gy, 2) : "null");
+
+  json += ",\"gz\":" +
+    (mpuReady ? String(gz, 2) : "null");
+
+  json += ",\"slope\":" +
+    (mpuReady ? String(slope, 2) : "null");
+
+  json += "}";
+
+  latestSensorJson = json;
+
+}
+
+// ==================================================
+//                 HTTP HANDLERS
+// ==================================================
+
+void handleData() {
+
+  server.send(
+    200,
+    "application/json",
+    latestSensorJson
+  );
+
+}
+
+void handleRoot() {
+
+  server.send_P(
+    200,
+    "text/html",
+    PAGE
+  );
+
+}
+
+// ==================================================
+//                 MQTT CONNECTION
+// ==================================================
+
+void reconnectMQTT() {
+
+  if (mqttClient.connected()) return;
+
+  Serial.print("Connecting to HiveMQ...");
+
+  String clientId =
+    "NASA-Rover-" +
+    String((uint32_t)ESP.getEfuseMac(), HEX);
+
+  if (mqttClient.connect(clientId.c_str())) {
+
+    Serial.println("MQTT Connected!");
+
+    if (mqttClient.subscribe(mqttCommandTopic)) {
+
+      Serial.println("Subscribed to Mission Command Topic!");
+
+      if (missionAbortedByMqtt) {
+
+        publishMissionStatus(
+          "MISSION_ABORTED_MQTT_LOST"
+        );
+
+        missionAbortedByMqtt = false;
+
+      }
+
+    } else {
+
+      Serial.println("Command Subscription Failed!");
+
+    }
+
+  } else {
+
+    Serial.print("MQTT Connection Failed. State: ");
+
+    Serial.println(mqttClient.state());
+
+  }
+
+}
+
+// ==================================================
+//                 PUBLISH SENSOR DATA
+// ==================================================
+
+void publishSensorData() {
+
+  if (!mqttClient.connected()) return;
+
+  bool published =
+    mqttClient.publish(
+      mqttTopic,
+      latestSensorJson.c_str()
+    );
+
+  if (published) {
+
+    Serial.println("MQTT Data Published:");
+
+    Serial.println(latestSensorJson);
+
+  } else {
+
+    Serial.println("MQTT Publish Failed!");
+
+  }
+
+}
+
+// ==================================================
+//                      SETUP
+// ==================================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(ENA_PIN, OUTPUT);
+  pinMode(IN1_PIN, OUTPUT);
+  pinMode(IN2_PIN, OUTPUT);
+
+  pinMode(IN3_PIN, OUTPUT);
+  pinMode(IN4_PIN, OUTPUT);
+  pinMode(ENB_PIN, OUTPUT);
+
+  stopMotors();
+
+  // SENSORS
+  dht.begin();
+
+  Wire.begin(21, 22);
+
+  if (mpu.begin()) {
+
+    mpuReady = true;
+
+    Serial.println("MPU6050 Connected!");
+
+  } else {
+
+    Serial.println("MPU6050 Not Found!");
+
+  }
+
+  if (bmp.begin()) {
+
+    bmpReady = true;
+
+    Serial.println("BMP180 Connected!");
+
+  } else {
+
+    Serial.println("BMP180 Not Found!");
+
+  }
+
+  // WIFI
+  WiFi.mode(WIFI_AP_STA);
+
+  mqttClient.setServer(mqttServer, mqttPort);
+
+  mqttClient.setCallback(mqttCallback);
+
+  mqttClient.setBufferSize(512);
+
+  if (WiFi.softAP(apSSID, apPassword)) {
+
+    Serial.println("Access Point Started!");
+
+    Serial.print("Dashboard IP: ");
+
+    Serial.println(WiFi.softAPIP());
+
+  } else {
+
+    Serial.println("Access Point Failed!");
+
+  }
+
+  WiFi.begin(wifiSSID, wifiPassword);
+
+  Serial.print("Connecting to Internet");
+
+  int attempts = 0;
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    attempts < 40
+  ) {
+
+    delay(500);
+
+    Serial.print(".");
+
+    attempts++;
+
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    Serial.println("\nInternet WiFi Connected!");
+
+    Serial.print("Internet IP: ");
+
+    Serial.println(WiFi.localIP());
+
+  } else {
+
+    Serial.println("\nInternet WiFi Connection Failed!");
+
+  }
+
+  // WEB SERVER
+  server.on("/", HTTP_GET, handleRoot);
+
+  server.on("/data", HTTP_GET, handleData);
+
+  server.begin();
+
+  updateSensorData();
+
+  lastSensorRead = millis();
+
+  Serial.println("NASA Rover Dashboard Ready!");
+
+}
+
+// ==================================================
+//                       LOOP
+// ==================================================
+
+void loop() {
+
+  server.handleClient();
+
+  // MQTT LOSS SAFETY
+  if (missionRunning && !mqttClient.connected()) {
+
+    stopMotors();
+
+    missionRunning = false;
+
+    missionPhase = MISSION_IDLE;
+
+    phaseStartTime = 0;
+
+    missionAbortedByMqtt = true;
+
+    Serial.println("!!! MQTT LOST - MOTORS STOPPED !!!");
+
+  }
+
+  // MQTT RECONNECT
+  if (
+    WiFi.status() == WL_CONNECTED &&
+    !mqttClient.connected() &&
+    millis() - lastReconnectAttempt >= reconnectInterval
+  ) {
+
+    lastReconnectAttempt = millis();
+
+    reconnectMQTT();
+
+  }
+
+  if (mqttClient.connected()) {
+
+    mqttClient.loop();
+
+  }
+
+  // MISSION UPDATE
+  updateRoverMission();
+
+  // SENSOR UPDATE
+  if (millis() - lastSensorRead >= sensorInterval) {
+
+    lastSensorRead = millis();
+
+    updateSensorData();
+
+    if (mqttClient.connected()) {
+
+      publishSensorData();
+
+    }
+
+  }
+
+}
