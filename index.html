@@ -8434,12 +8434,12 @@ window.liveTelemetry = {
     alt: null
 };
 
-var isStreaming = false;
-var streamInterval = null;
-var isRealHardwareConnected = false;
-var serialPort = null;
-var mqttClient = null;
-var mqttDataReceived = false;
+isStreaming = false;
+streamInterval = null;
+isRealHardwareConnected = false;
+serialPort = null;
+mqttClient = null;
+mqttDataReceived = false;
 var totalPacketsReceived = 0;
 var lastPacketTimestamp = null;
 
@@ -8450,19 +8450,19 @@ var roverMissionSeconds = 0;
 var roverSamplesCount = 0;
 
 // Multi-site comparison state
-var selectedMultiSiteIds = new Set();
-var currentCandidateFilter = 'all';
-var currentPlacesLibraryFilter = 'all';
-var currentAtlasFilter = 'all';
+selectedMultiSiteIds = new Set();
+currentCandidateFilter = 'all';
+currentPlacesLibraryFilter = 'all';
+currentAtlasFilter = 'all';
 var multiComparisonChartInstance = null;
 
 // Leaflet map instances
-var roverPickerMap = null;
-var roverMarker = null;
-var pickerMap = null;
-var pickerMarker = null;
-var fullAtlasMap = null;
-var atlasMarkersLayerGroup = null;
+roverPickerMap = null;
+roverMarker = null;
+pickerMap = null;
+pickerMarker = null;
+fullAtlasMap = null;
+atlasMarkersLayerGroup = null;
 
 // Reference Baselines for Comparison (NASA Planetary Models)
 // ==========================================================================
@@ -13248,6 +13248,198 @@ body{top:0!important}
     if (getSaved() === 'en') {
         window.addEventListener('load', function () { setTimeout(toEnglish, 800); });
     }
+})();
+</script>
+
+
+<!-- NAZEER ADDITIVE PATCH: complete Earth-to-Moon/Mars comparison + printable report -->
+<style id="nazeer-complete-comparison-patch">
+#multi-site-tab .nz-compare-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px;background:#f4faff;border:1px solid #d6eafa;border-radius:14px}
+#multi-site-tab .nz-compare-toolbar select{min-width:190px}
+#multi-site-tab .nz-earth-list{max-height:560px;overflow:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;padding:4px}
+#multi-site-tab .nz-earth-option{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid #dbeafa;border-radius:13px;background:#fff;cursor:pointer}
+#multi-site-tab .nz-earth-option:has(input:checked){border-color:#315bd0;background:#f0f6ff;box-shadow:0 0 0 1px #315bd0}
+#multi-site-tab .nz-earth-option input{margin-top:4px;accent-color:#315bd0}
+#multi-site-tab .nz-earth-option small{color:#55708d;display:block;line-height:1.8}
+#multi-site-tab .nz-full-factor-table{width:100%;border-collapse:collapse;font-size:11px}
+#multi-site-tab .nz-full-factor-table th,#multi-site-tab .nz-full-factor-table td{border:1px solid #dbe7f2;padding:8px;text-align:right;vertical-align:top}
+#multi-site-tab .nz-full-factor-table th{background:#eaf4ff;color:#173b79}
+#multi-site-tab .nz-factor-missing{color:#a35b16;font-weight:700}
+@media print{
+ #print-multi-report-container.active-print{display:block!important}
+ #print-multi-report-container table{width:100%;border-collapse:collapse}
+ #print-multi-report-container th,#print-multi-report-container td{border:1px solid #aab8c8;padding:6px;font-size:9pt}
+ #print-multi-report-container h1,#print-multi-report-container h2,#print-multi-report-container h3{break-after:avoid}
+ #print-multi-report-container .nz-print-site{break-inside:avoid;margin-bottom:18px}
+}
+</style>
+<script id="nazeer-complete-comparison-patch">
+(function(){
+'use strict';
+const $ = id => document.getElementById(id);
+const safe = v => (typeof escapeHTML === 'function' ? escapeHTML(v == null ? '—' : String(v)) : String(v == null ? '—' : v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])));
+const num = v => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+const keys = [
+ ['temp','درجة الحرارة السطحية','°C'],['hum','الرطوبة النسبية','%'],['press','الضغط الجوي','hPa'],
+ ['slope','زاوية الميل والانحدار','°'],['elevation','الارتفاع التضاريسي','م'],
+ ['solar','الإشعاع الشمسي','kWh/m²'],['sarRough','خشونة السطح الرادارية SAR','سم'],
+ ['aridity','مؤشر الجفاف','%'],['dust','تطاير الغبار AOD','']
+];
+function earthSites(){return Array.isArray(window.EARTH_ANALOG_SITES)?window.EARTH_ANALOG_SITES:(typeof EARTH_ANALOG_SITES!=='undefined'?EARTH_ANALOG_SITES:[]);}
+function models(){return window.PLANETARY_REFERENCE_MODELS || (typeof PLANETARY_REFERENCE_MODELS!=='undefined'?PLANETARY_REFERENCE_MODELS:{});}
+function selectedBody(){return $('nz-target-body-select')?.value || 'mars';}
+function selectedModel(){const m=models();return m[$('multi-reference-site')?.value] || Object.values(m).find(x=>x.body===(selectedBody()==='moon'?'القمر':'المريخ'));}
+function populateTargetModels(){
+ const ref=$('multi-reference-site'); if(!ref)return;
+ const prior=ref.value, body=selectedBody(), wanted=body==='moon'?'القمر':'المريخ';
+ ref.innerHTML='';
+ Object.entries(models()).filter(([k,m])=>m.body===wanted || (body==='moon' && /moon|luna/i.test(k)) || (body==='mars' && /mars/i.test(k))).forEach(([k,m])=>{
+   const o=document.createElement('option');o.value=k;o.textContent=m.name+' — '+(m.pdsDatasetId||'مرجع كوكبي');ref.appendChild(o);
+ });
+ if(Array.from(ref.options).some(o=>o.value===prior))ref.value=prior;
+}
+function renderEarthCandidates(){
+ const host=$('multi-candidate-sites-list');if(!host)return;
+ const all=earthSites();let list=all;
+ const filter=window.currentCandidateFilter || 'all';
+ if(filter==='rover')list=all.filter(s=>s.isRoverSite===true);
+ if(filter==='manual')list=all.filter(s=>s.isRoverSite!==true);
+ host.classList.add('nz-earth-list');
+ host.innerHTML='';
+ if(!list.length){host.innerHTML='<div class="col-span-full p-6 text-center text-slate-500">لا توجد مواقع أرضية محفوظة في قاعدة بيانات المتصفح حالياً. أضف المواقع من دليل الأماكن أو من نموذج الإدخال.</div>';updateCount();return;}
+ list.forEach(site=>{
+   const label=document.createElement('label');label.className='nz-earth-option';
+   const cb=document.createElement('input');cb.type='checkbox';cb.checked=selectedMultiSiteIds.has(site.id);
+   cb.addEventListener('change',()=>{if(cb.checked)selectedMultiSiteIds.add(site.id);else selectedMultiSiteIds.delete(site.id);updateCount();});
+   const info=document.createElement('span');info.style.flex='1';
+   const vals=[['حرارة',site.temp,'°C'],['رطوبة',site.hum,'%'],['ضغط',site.press,'hPa'],['ميل',site.slope,'°'],['ارتفاع',site.elevation,'م'],['إشعاع',site.solarInsolation,'kWh/m²'],['SAR',site.sarRoughness,'سم'],['جفاف',site.aridityIndex,'%'],['غبار',site.dustAOD,'']];
+   info.innerHTML='<b>'+safe(site.name)+'</b><small>'+safe(site.country||'الدولة غير محددة')+' · '+(site.isRoverSite?'رصد ميداني ESP32':'بيانات استشعار عن بعد / إدخال يدوي')+'</small><small>'+vals.map(v=>v[0]+': '+(num(v[1])?safe(v[1])+v[2]:'غير متاح')).join(' | ')+'</small>';
+   label.append(cb,info);host.appendChild(label);
+ });
+ updateCount();
+}
+function updateCount(){
+ const el=$('multi-selected-counter');if(el)el.textContent='المواقع المحددة: '+selectedMultiSiteIds.size+' / '+earthSites().length;
+}
+function ensureControls(){
+ const section=$('multi-site-tab'), ref=$('multi-reference-site');if(!section||!ref)return;
+ const baseline=ref.closest('.bg-indigo-50\\/60') || ref.parentElement?.parentElement;
+ if(baseline && !$('nz-target-body-select')){
+   const toolbar=document.createElement('div');toolbar.id='nz-target-body';toolbar.className='hidden';
+   const wrap=document.createElement('div');wrap.className='nz-compare-toolbar';
+   wrap.innerHTML='<label for="nz-target-body-select" class="text-xs font-bold">الجرم السماوي:</label><select id="nz-target-body-select" class="border rounded-xl px-3 py-2 text-xs font-bold"><option value="mars">المريخ</option><option value="moon">القمر</option></select><button type="button" id="nz-select-all-earth" class="px-3 py-2 rounded-xl bg-blue-700 text-white text-xs font-bold">تحديد جميع المواقع الأرضية</button><button type="button" id="nz-clear-earth" class="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold">إلغاء تحديد الكل</button>';
+   baseline.parentNode.insertBefore(wrap,baseline);
+   $('nz-target-body-select').addEventListener('change',()=>{populateTargetModels();});
+   $('nz-select-all-earth').addEventListener('click',()=>{earthSites().forEach(s=>selectedMultiSiteIds.add(s.id));renderEarthCandidates();});
+   $('nz-clear-earth').addEventListener('click',()=>{selectedMultiSiteIds.clear();renderEarthCandidates();});
+   const lbl=baseline.querySelector('label');if(lbl)lbl.textContent='اختر الموقع القمري أو المريخي المرجعي للمقارنة:';
+   const note=baseline.querySelector('p');if(note)note.textContent='اختر الجرم السماوي ثم الموقع المستهدف. ستتم مقارنة كل موقع أرضي محدد معه عبر جميع العوامل المتاحة.';
+ }
+}
+function factorData(site,base){
+ const result=evaluateSiteAgainstBaseline(site,base);
+ const rover=site.isRoverSite===true;
+ const nominal=rover
+  ? {temp:25,hum:25,press:25,slope:25,elevation:0,solar:0,sarRough:0,aridity:0,dust:0}
+  : {temp:15,hum:15,press:10,slope:15,elevation:10,solar:10,sarRough:10,aridity:10,dust:5};
+ const tolerance={temp:60,hum:50,press:1000,slope:30,elevation:3000,solar:6,sarRough:6,aridity:50,dust:.8};
+ const values={temp:site.temp,hum:site.hum,press:site.press,slope:site.slope,elevation:site.elevation,solar:site.solarInsolation,sarRough:site.sarRoughness,aridity:site.aridityIndex,dust:site.dustAOD};
+ const refs={temp:base.temp,hum:base.hum,press:base.press,slope:base.slope,elevation:base.elevation,solar:base.solarInsolation,sarRough:base.sarRoughness,aridity:base.aridityIndex,dust:base.dustAOD};
+ let total=0,score=0;
+ Object.keys(nominal).forEach(k=>{
+  const f=result.factors[k], raw=calcParamScore(values[k],refs[k],tolerance[k]);
+  f.val=values[k];f.baseVal=refs[k];f.available=nominal[k]>0 && raw!==null;
+  f.score=raw===null?0:raw;f.weight=0;
+  if(f.available)total+=nominal[k];
+ });
+ Object.keys(nominal).forEach(k=>{
+  const f=result.factors[k];
+  if(f.available){f.weight=nominal[k]/total*100;score+=f.score*f.weight/100;}
+ });
+ result.overallScore=total?Math.max(0,Math.min(100,Math.round(score))):0;
+ result.weightSummary='توزيع الأوزان على '+Object.values(result.factors).filter(f=>f.available).length+' عوامل متاحة من أصل 9 (تغطية اسمية '+total+'%)';
+ return result;
+}
+function renderFullCards(results,base){
+ const host=$('multi-detailed-cards-container');if(!host)return;host.innerHTML='';
+ results.forEach((r,i)=>{
+  const rows=keys.map(([k,label,unit])=>{
+   const f=r.factors[k], earth=f?.val, target=f?.baseVal;
+   return '<tr><td>'+safe(label)+'</td><td>'+safe(num(earth)?earth+' '+unit:'غير متاح')+'</td><td>'+safe(num(target)?target+' '+unit:'غير متاح')+'</td><td>'+(f?.available?f.score+'%':'<span class="nz-factor-missing">غير متاح / مستبعد</span>')+'</td><td>'+(f?.available?f.weight+'%':'0%')+'</td></tr>';
+  }).join('');
+  const card=document.createElement('article');card.className='bg-white rounded-2xl border border-slate-200 p-5 space-y-3';
+  card.innerHTML='<div class="flex flex-wrap justify-between gap-3 border-b pb-3"><div><h4 class="font-black text-base">'+safe(r.site.name)+'</h4><p class="text-xs text-slate-500">'+safe(r.site.country||'')+' · '+(r.isRover?'ESP32':'NASA / يدوي')+'</p></div><div class="text-2xl font-black text-blue-700">'+r.overallScore+'%</div></div>'+
+  '<p class="text-xs text-slate-600">الموقع الفضائي المرجعي: <b>'+safe(base.name)+'</b> · تغطية الأوزان: '+safe(r.weightSummary)+'</p>'+
+  '<div class="overflow-x-auto"><table class="nz-full-factor-table"><thead><tr><th>العامل</th><th>قيمة الموقع الأرضي</th><th>قيمة الموقع الفضائي</th><th>درجة التطابق</th><th>الوزن</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+  '<div class="grid md:grid-cols-2 gap-2 text-xs"><div class="bg-blue-50 rounded-xl p-3"><b>وصف الموقع الأرضي:</b><p>'+safe(r.site.desc||'لا يوجد وصف مسجل')+'</p><p>المصدر: '+safe(r.site.source||'غير موثق')+'</p><p>الإحداثيات: '+safe(Array.isArray(r.site.coords)?r.site.coords.join(', '):'غير متاحة')+'</p></div><div class="bg-blue-50 rounded-xl p-3"><b>بيانات المرجع الفضائي:</b><p>'+safe(base.desc||'لا يوجد وصف')+'</p><p>Dataset: '+safe(base.pdsDatasetId||'غير محدد')+'</p><p>مصدر الأرشيف: '+safe(base.pdsNode||'غير محدد')+'</p></div></div>';
+  host.appendChild(card);
+ });
+}
+window.updateMultiSiteSelectors=function(){ensureControls();populateTargetModels();renderEarthCandidates();};
+window.toggleCandidateSiteSelection=function(id,checked){if(checked)selectedMultiSiteIds.add(id);else selectedMultiSiteIds.delete(id);updateCount();};
+window.clearMultiSiteSelection=function(){selectedMultiSiteIds.clear();renderEarthCandidates();const box=$('multi-results-container');if(box)box.classList.add('hidden');};
+window.setCandidateFilter=function(filter){window.currentCandidateFilter=filter;renderEarthCandidates();};
+window.runMultiSiteComparison=function(){
+ const base=selectedModel();if(!base){alert('لا توجد بيانات مرجعية لهذا الجرم.');return;}
+ const candidates=earthSites().filter(s=>selectedMultiSiteIds.has(s.id));
+ if(!candidates.length){alert('حدد موقعاً أرضياً واحداً على الأقل أو استخدم زر تحديد جميع المواقع.');return;}
+ const loading=$('multi-loading-indicator'),box=$('multi-results-container');if(loading)loading.classList.remove('hidden');
+ try{
+  multiComparisonResults=candidates.map(site=>factorData(site,base)).sort((a,b)=>b.overallScore-a.overallScore);
+  window.nzActiveComparison={base,body:selectedBody()};
+  const head=$('multi-results-header');if(head)head.textContent='مقارنة '+candidates.length+' موقعاً أرضياً مع '+base.name;
+  const tbody=$('multi-comparison-table-body');if(tbody){
+   tbody.innerHTML='';
+   multiComparisonResults.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    const factorCells=keys.map(([k,label])=>{const f=r.factors[k];return '<td class="p-2 text-center">'+(f?.available?f.score+'%':'غير متاح')+'</td>';}).join('');
+    tr.innerHTML='<td class="p-2">'+(i+1)+'</td><td class="p-2 font-bold">'+safe(r.site.name)+'</td><td class="p-2">'+(r.isRover?'ESP32':'NASA / يدوي')+'</td><td class="p-2 text-center font-black">'+r.overallScore+'%</td><td class="p-2 text-center">'+safe(r.weightSummary)+'</td>'+factorCells;
+    tbody.appendChild(tr);
+   });
+  }
+  renderFullCards(multiComparisonResults,base);
+  const canvas=$('multiComparisonBarChart');
+  if(canvas&&typeof Chart!=='undefined'){
+   if(typeof multiComparisonChartInstance!=='undefined'&&multiComparisonChartInstance)multiComparisonChartInstance.destroy();
+   const labels=keys.map(x=>x[1]);
+   const sets=multiComparisonResults.map(r=>({label:r.site.name+' ('+r.overallScore+'%)',data:keys.map(([k])=>r.factors[k]?.available?r.factors[k].score:null),borderWidth:1}));
+   multiComparisonChartInstance=new Chart(canvas.getContext('2d'),{type:'bar',data:{labels,datasets:sets},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,max:100}},plugins:{legend:{position:'bottom'}}}});
+  }
+  if(box){box.classList.remove('hidden');box.scrollIntoView({behavior:'smooth',block:'start'});}
+ }catch(err){console.error('Nazeer comparison error',err);alert('تعذر تنفيذ المقارنة: '+err.message);}
+ finally{if(loading)loading.classList.add('hidden');}
+};
+window.exportMultiComparisonPDF=function(){
+ if(!Array.isArray(multiComparisonResults)||!multiComparisonResults.length){alert('نفّذ المقارنة أولاً ثم اطبع التقرير.');return;}
+ const base=window.nzActiveComparison?.base || selectedModel(),now=new Date();
+ const set=(id,v)=>{const e=$(id);if(e)e.textContent=v==null?'—':String(v);};
+ set('print-multi-doc-id','NZR-MULTI-'+now.getFullYear()+'-'+Math.floor(1000+Math.random()*9000));
+ set('print-multi-doc-date',now.toLocaleString('ar-EG'));
+ set('print-multi-target-name',base.name+' ('+base.body+')');
+ const tbody=$('print-multi-table-body');if(tbody){
+  tbody.innerHTML='';
+  multiComparisonResults.forEach((r,i)=>{
+   const tr=document.createElement('tr');
+   tr.innerHTML='<td>'+(i+1)+'</td><td>'+safe(r.site.name)+'</td><td>'+safe(r.site.country||'')+'</td><td>'+r.overallScore+'%</td><td>'+safe(r.weightSummary)+'</td>'+keys.map(([k])=>'<td>'+(r.factors[k]?.available?r.factors[k].score+'%':'غير متاح')+'</td>').join('');
+   tbody.appendChild(tr);
+  });
+  const head=tbody.closest('table')?.querySelector('thead tr');
+  if(head)head.innerHTML='<th>#</th><th>الموقع الأرضي</th><th>الدولة</th><th>التطابق الكلي</th><th>توزيع الأوزان</th>'+keys.map(x=>'<th>'+safe(x[1])+'</th>').join('');
+ }
+ const details=$('print-multi-details-container');if(details){
+  details.innerHTML=multiComparisonResults.map((r,i)=>{
+   const rows=keys.map(([k,label,unit])=>{const f=r.factors[k];return '<tr><td>'+safe(label)+'</td><td>'+safe(num(f?.val)?f.val+' '+unit:'غير متاح')+'</td><td>'+safe(num(f?.baseVal)?f.baseVal+' '+unit:'غير متاح')+'</td><td>'+(f?.available?f.score+'%':'غير متاح')+'</td><td>'+(f?.available?f.weight+'%':'0%')+'</td></tr>';}).join('');
+   return '<section class="nz-print-site"><h3>'+safe(r.site.name)+' — '+r.overallScore+'%</h3><p>'+safe(r.site.country||'')+' | '+safe(r.site.source||'مصدر غير موثق')+'</p><table><thead><tr><th>العامل</th><th>الأرض</th><th>المرجع الفضائي</th><th>التطابق</th><th>الوزن</th></tr></thead><tbody>'+rows+'</tbody></table><p>'+safe(r.site.desc||'')+'</p></section>';
+  }).join('');
+ }
+ set('print-multi-conclusion','تمت مقارنة '+multiComparisonResults.length+' موقعاً أرضياً مع '+base.name+'. الدرجات مؤشر تشابه تجريبي وفق العوامل المتاحة والأوزان المعتمدة؛ لا تمثل إثباتاً للتطابق البيئي أو اعتماداً علمياً مستقلاً. العوامل غير المتاحة مستبعدة من الحساب ولا تُعامل كقيم صفرية.');
+ const single=$('print-report-container'),multi=$('print-multi-report-container');
+ if(single)single.classList.remove('active-print');if(multi)multi.classList.add('active-print');
+ window.print();
+ setTimeout(()=>{if(multi)multi.classList.remove('active-print');},800);
+};
+document.addEventListener('DOMContentLoaded',()=>{ensureControls();window.updateMultiSiteSelectors();});
+window.addEventListener('load',()=>setTimeout(()=>{ensureControls();window.updateMultiSiteSelectors();},900));
 })();
 </script>
 
